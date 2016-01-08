@@ -74,6 +74,8 @@ class JavaAnalyzer(
     case SymbolAtPointReq(file, point) =>
       sender() ! javaCompiler.askSymbolAtPoint(file, point)
 
+    case ImplicitInfoReq(file, range: OffsetRange) =>
+      sender() ! javaCompiler.askImplicitInfoAtPoint(file, range.from)
   }
 
 }

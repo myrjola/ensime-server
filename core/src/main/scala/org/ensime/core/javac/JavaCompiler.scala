@@ -27,6 +27,7 @@ import scala.tools.nsc.interactive.CompilerControl
 import scala.tools.nsc.io.AbstractFile
 import scala.tools.nsc.reporters.Reporter
 import scala.tools.refactoring.analysis.GlobalIndexes
+import scala.collection.JavaConversions._
 import javax.lang.model.element.ElementKind
 import javax.lang.model.element.ExecutableElement
 import javax.lang.model.element.TypeElement
@@ -39,6 +40,7 @@ class JavaCompiler(
     val vfs: EnsimeVFS
 ) extends JavaDocFinding with JavaCompletion with JavaSourceFinding with Helpers with SLF4JLogging {
 
+  private val collector = new DiagnosticCollector[JavaFileObject];
   private val listener = new JavaDiagnosticListener()
   private val silencer = new SilencedDiagnosticListener()
   private val cp = (config.allJars ++ config.targetClasspath).mkString(File.pathSeparator)
@@ -84,12 +86,13 @@ class JavaCompiler(
     }
   }
 
+  def nullTpe = new BasicTypeInfo("NA", -1, DeclaredAs.Nil, "NA", List.empty, List.empty, None, None)
+
   def askSymbolAtPoint(file: SourceFileInfo, offset: Int): Option[SymbolInfo] = {
     pathToPoint(file, offset) flatMap {
       case (info: CompilationInfo, path: TreePath) =>
         def withName(name: String): Option[SymbolInfo] = {
           val tpeMirror = Option(info.getTrees().getTypeMirror(path))
-          val nullTpe = new BasicTypeInfo("NA", -1, DeclaredAs.Nil, "NA", List.empty, List.empty, None, None)
           Some(SymbolInfo(
             fqn(info, path).map(_.toFqnString).getOrElse(name),
             name,
@@ -118,6 +121,30 @@ class JavaCompiler(
     file: SourceFileInfo, offset: Int, maxResults: Int, caseSens: Boolean
   ): CompletionInfoList = {
     completionsAt(file, offset, maxResults, caseSens)
+  }
+
+  def askImplicitInfoAtPoint(file: SourceFileInfo, offset: Int): Unit = {
+    val task = getTask("all", collector, workingSet.values)
+    task.parse()
+    task.analyze()
+    collector.getDiagnostics.toSeq.filter {
+      diagnostic =>
+        {
+          diagnostic.getSource.toUri == file.file.toURI() &&
+            diagnostic.getStartPosition < offset &&
+            diagnostic.getEndPosition > offset
+        }
+    }.map {
+      diag =>
+        ImplicitConversionInfo(
+          offset,
+          offset,
+          SymbolInfo(
+            diag.getKind.toString() + ": " + diag.getMessage(Locale.ENGLISH),
+            "", None, nullTpe, false, None
+          )
+        )
+    }
   }
 
   protected def pathToPoint(file: SourceFileInfo, offset: Int): Option[(CompilationInfo, TreePath)] = {
